@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "npm run build:client && next dev",
     "build": "npm run build:client && next build",
-    "build:client": "npx esbuild src/client/search.ts --bundle --outfile=public/search.js --target=es2018 && npx esbuild src/client/search.ts --bundle --minify --outfile=public/search.min.js --target=es2018",
+    "build:client": "./node_modules/.bin/esbuild src/client/search.ts --bundle --outfile=public/search.js --target=es2018 && ./node_modules/.bin/esbuild src/client/search.ts --bundle --minify --outfile=public/search.min.js --target=es2018",
     "start": "next start",
     "lint": "eslint"
   },
