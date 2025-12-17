@@ -5664,14 +5664,14 @@
           "original": "/Users/shanegauthier/CODE/apps/webflow-cms-search/.open-next/server-functions/default/.next/server/app/_not-found/page_client-reference-manifest.js"
         },
         {
-          "path": ".open-next/server-functions/default/.next/server/app/api/search/route_client-reference-manifest.js",
-          "kind": "require-call",
-          "original": "/Users/shanegauthier/CODE/apps/webflow-cms-search/.open-next/server-functions/default/.next/server/app/api/search/route_client-reference-manifest.js"
-        },
-        {
           "path": ".open-next/server-functions/default/.next/server/app/_global-error/page_client-reference-manifest.js",
           "kind": "require-call",
           "original": "/Users/shanegauthier/CODE/apps/webflow-cms-search/.open-next/server-functions/default/.next/server/app/_global-error/page_client-reference-manifest.js"
+        },
+        {
+          "path": ".open-next/server-functions/default/.next/server/app/api/search/route_client-reference-manifest.js",
+          "kind": "require-call",
+          "original": "/Users/shanegauthier/CODE/apps/webflow-cms-search/.open-next/server-functions/default/.next/server/app/api/search/route_client-reference-manifest.js"
         }
       ],
       "format": "cjs"

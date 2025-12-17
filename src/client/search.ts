@@ -1,6 +1,7 @@
 (function () {
   interface SearchConfig {
     apiUrl: string;
+    apiPath: string;
     collections: string;
     debounceMs: number;
   }
@@ -60,6 +61,8 @@
     // Get configuration from data attributes
     const apiUrl =
       searchInput.getAttribute("data-api-url") || window.location.origin;
+    const apiPath =
+      searchInput.getAttribute("data-api-path") || "/app/api/search";
     const collections = searchInput.getAttribute("data-collections") || "all";
     const debounceMs = parseInt(
       searchInput.getAttribute("data-debounce") || "300",
@@ -71,6 +74,7 @@
 
     const config: SearchConfig = {
       apiUrl,
+      apiPath,
       collections,
       debounceMs,
     };
@@ -82,7 +86,7 @@
       }
 
       try {
-        const url = new URL("/api/search", config.apiUrl);
+        const url = new URL(config.apiPath, config.apiUrl);
         url.searchParams.set("q", query);
         url.searchParams.set("collections", config.collections);
 
