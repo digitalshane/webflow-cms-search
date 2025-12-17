@@ -14,6 +14,62 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
 
+interface WebflowCollection {
+  id: string;
+  displayName: string;
+  singularName: string;
+  slug: string;
+}
+
+interface CollectionsResponse {
+  collections: WebflowCollection[];
+}
+
+// Fetch all collections for the site
+async function fetchSiteCollections(
+  siteId: string,
+  token: string
+): Promise<WebflowCollection[]> {
+  const url = `${WEBFLOW_API_BASE}/sites/${siteId}/collections`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch collections: ${response.status}`);
+  }
+
+  const data: CollectionsResponse = await response.json();
+  return data.collections || [];
+}
+
+// Resolve collection names to IDs
+function resolveCollections(
+  requested: string,
+  collections: WebflowCollection[]
+): string[] {
+  if (requested.toLowerCase() === "all") {
+    return collections.map((c) => c.id);
+  }
+
+  const requestedNames = requested.split(",").map((n) => n.trim().toLowerCase());
+
+  return requestedNames
+    .map((name) => {
+      // Find by slug, displayName, or singularName (case-insensitive)
+      const found = collections.find(
+        (c) =>
+          c.slug.toLowerCase() === name ||
+          c.displayName.toLowerCase() === name ||
+          c.singularName.toLowerCase() === name
+      );
+      return found?.id;
+    })
+    .filter((id): id is string => Boolean(id));
+}
+
 interface WebflowItem {
   id: string;
   lastPublished: string;
@@ -106,17 +162,10 @@ function searchItems(
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q");
-  const collections = searchParams.get("collections");
+  const collectionsParam = searchParams.get("collections") || "all";
 
   if (!query) {
     return jsonResponse({ error: "Query parameter 'q' is required" }, 400);
-  }
-
-  if (!collections) {
-    return jsonResponse(
-      { error: "Query parameter 'collections' is required" },
-      400
-    );
   }
 
   const token = process.env.WEBFLOW_API_TOKEN;
@@ -127,7 +176,40 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const collectionIds = collections.split(",").map((id) => id.trim());
+  const siteId = process.env.WEBFLOW_SITE_ID;
+  if (!siteId) {
+    return jsonResponse(
+      { error: "Webflow site ID not configured" },
+      500
+    );
+  }
+
+  let siteCollections: WebflowCollection[];
+  try {
+    siteCollections = await fetchSiteCollections(siteId, token);
+  } catch (error) {
+    console.error("Failed to fetch collections:", error);
+    return jsonResponse(
+      { error: "Failed to fetch site collections" },
+      500
+    );
+  }
+
+  if (siteCollections.length === 0) {
+    return jsonResponse(
+      { error: "No collections found for this site" },
+      404
+    );
+  }
+
+  const collectionIds = resolveCollections(collectionsParam, siteCollections);
+  if (collectionIds.length === 0) {
+    return jsonResponse(
+      { error: `Collection not found: ${collectionsParam}` },
+      404
+    );
+  }
+
   const results: SearchResult[] = [];
 
   try {

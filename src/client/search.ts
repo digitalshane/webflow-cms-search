@@ -60,29 +60,18 @@
     // Get configuration from data attributes
     const apiUrl =
       searchInput.getAttribute("data-api-url") || window.location.origin;
-    const scope = searchInput.getAttribute("data-scope") || "all";
-    const collections = searchInput.getAttribute("data-collections") || "";
+    const collections = searchInput.getAttribute("data-collections") || "all";
     const debounceMs = parseInt(
       searchInput.getAttribute("data-debounce") || "300",
       10
     );
-
-    if (!collections) {
-      console.error(
-        "Webflow Search: data-collections attribute is required on search input"
-      );
-      return;
-    }
 
     // Hide the template item initially
     resultTemplate.style.display = "none";
 
     const config: SearchConfig = {
       apiUrl,
-      collections:
-        scope === "all"
-          ? collections
-          : collections.split(",").find((c) => c.trim() === scope) || collections,
+      collections,
       debounceMs,
     };
 
