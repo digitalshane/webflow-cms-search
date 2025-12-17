@@ -1,0 +1,13 @@
+{
+  "telemetry": {
+    "global": {
+      "allowTelemetry": false,
+      "lastPrompted": 1765997498993,
+      "version": "1.9.0"
+    }
+  },
+  "cloud": {
+    "project_id": "262c24a1-13da-40a9-ac1d-c09f79faae6c",
+    "framework": "nextjs"
+  }
+}
