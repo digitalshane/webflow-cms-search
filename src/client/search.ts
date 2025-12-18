@@ -1,3 +1,6 @@
+// Injected at build time by esbuild
+declare const DEFAULT_API_PATH: string;
+
 (function () {
   interface SearchConfig {
     apiUrl: string;
@@ -61,9 +64,9 @@
     // Get configuration from data attributes
     const apiUrl =
       searchInput.getAttribute("data-api-url") || window.location.origin;
-    const isStaging = window.location.hostname.endsWith(".webflow.io");
+    // DEFAULT_API_PATH is replaced at build time: /api/search for dev, /app/api/search for prod
     const apiPath =
-      searchInput.getAttribute("data-api-path") || (isStaging ? "/api/search" : "/app/api/search");
+      searchInput.getAttribute("data-api-path") || DEFAULT_API_PATH;
     const collections = searchInput.getAttribute("data-collections") || "all";
     const debounceMs = parseInt(
       searchInput.getAttribute("data-debounce") || "300",
