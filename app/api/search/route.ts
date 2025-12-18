@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,80 +15,14 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
 
-interface WebflowCollection {
+interface StoredItem {
   id: string;
-  displayName: string;
-  singularName: string;
+  name: string;
   slug: string;
-}
-
-interface CollectionsResponse {
-  collections: WebflowCollection[];
-}
-
-// Fetch all collections for the site
-async function fetchSiteCollections(
-  siteId: string,
-  token: string
-): Promise<WebflowCollection[]> {
-  const url = `${WEBFLOW_API_BASE}/sites/${siteId}/collections`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch collections: ${response.status}`);
-  }
-
-  const data: CollectionsResponse = await response.json();
-  return data.collections || [];
-}
-
-// Resolve collection names to IDs
-function resolveCollections(
-  requested: string,
-  collections: WebflowCollection[]
-): string[] {
-  if (requested.toLowerCase() === "all") {
-    return collections.map((c) => c.id);
-  }
-
-  const requestedNames = requested.split(",").map((n) => n.trim().toLowerCase());
-
-  return requestedNames
-    .map((name) => {
-      // Find by slug, displayName, or singularName (case-insensitive)
-      const found = collections.find(
-        (c) =>
-          c.slug.toLowerCase() === name ||
-          c.displayName.toLowerCase() === name ||
-          c.singularName.toLowerCase() === name
-      );
-      return found?.id;
-    })
-    .filter((id): id is string => Boolean(id));
-}
-
-interface WebflowItem {
-  id: string;
-  lastPublished: string;
-  lastUpdated: string;
-  createdOn: string;
+  collectionId: string;
+  collectionSlug: string;
   fieldData: Record<string, unknown>;
-  cmsLocaleId: string;
-  isArchived: boolean;
-  isDraft: boolean;
-}
-
-interface WebflowResponse {
-  items: WebflowItem[];
-  pagination: {
-    limit: number;
-    offset: number;
-    total: number;
-  };
+  searchText: string;
 }
 
 interface SearchResult {
@@ -98,65 +33,11 @@ interface SearchResult {
   fieldData: Record<string, unknown>;
 }
 
-const WEBFLOW_API_BASE = "https://api-cdn.webflow.com/v2";
-
-async function fetchCollectionItems(
-  collectionId: string,
-  token: string
-): Promise<WebflowItem[]> {
-  const allItems: WebflowItem[] = [];
-  let offset = 0;
-  const limit = 100;
-
-  while (true) {
-    const url = `${WEBFLOW_API_BASE}/collections/${collectionId}/items/live?offset=${offset}&limit=${limit}`;
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Webflow API error: ${response.status}`);
-    }
-
-    const data: WebflowResponse = await response.json();
-    allItems.push(...data.items);
-
-    if (data.items.length < limit || allItems.length >= data.pagination.total) {
-      break;
-    }
-
-    offset += limit;
-  }
-
-  return allItems;
-}
-
-function searchItems(
-  items: WebflowItem[],
-  query: string,
-  collectionId: string
-): SearchResult[] {
-  const lowerQuery = query.toLowerCase();
-
-  return items
-    .filter((item) => {
-      const fieldData = item.fieldData;
-      return Object.values(fieldData).some((value) => {
-        if (typeof value === "string") {
-          return value.toLowerCase().includes(lowerQuery);
-        }
-        return false;
-      });
-    })
-    .map((item) => ({
-      id: item.id,
-      name: (item.fieldData.name as string) || "",
-      slug: (item.fieldData.slug as string) || "",
-      collectionId,
-      fieldData: item.fieldData,
-    }));
+interface CollectionMeta {
+  id: string;
+  slug: string;
+  displayName: string;
+  singularName: string;
 }
 
 export async function GET(request: NextRequest) {
@@ -168,45 +49,71 @@ export async function GET(request: NextRequest) {
     return jsonResponse({ error: "Query parameter 'q' is required" }, 400);
   }
 
-  const token = process.env.WEBFLOW_API_TOKEN;
-  if (!token) {
-    return jsonResponse({ error: "Webflow API token not configured" }, 500);
-  }
-
-  const siteId = process.env.WEBFLOW_SITE_ID;
-  if (!siteId) {
-    return jsonResponse({ error: "Webflow site ID not configured" }, 500);
-  }
-
-  let siteCollections: WebflowCollection[];
   try {
-    siteCollections = await fetchSiteCollections(siteId, token);
-  } catch (error) {
-    console.error("Failed to fetch collections:", error);
-    return jsonResponse({ error: "Failed to fetch site collections" }, 500);
-  }
+    const { env } = await getCloudflareContext({ async: true });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const kv = (env as any).SEARCH_CACHE;
 
-  if (siteCollections.length === 0) {
-    return jsonResponse({ error: "No collections found for this site" }, 404);
-  }
-
-  const collectionIds = resolveCollections(collectionsParam, siteCollections);
-  if (collectionIds.length === 0) {
-    return jsonResponse({ error: `Collection not found: ${collectionsParam}` }, 404);
-  }
-
-  const results: SearchResult[] = [];
-
-  try {
-    for (const collectionId of collectionIds) {
-      const items = await fetchCollectionItems(collectionId, token);
-      const matches = searchItems(items, query, collectionId);
-      results.push(...matches);
+    if (!kv) {
+      return jsonResponse({ error: "KV namespace not configured" }, 500);
     }
+
+    const lowerQuery = query.toLowerCase();
+    let items: StoredItem[] = [];
+
+    if (collectionsParam.toLowerCase() === "all") {
+      // Fetch all items
+      const allItemsJson = await kv.get("all_items");
+      if (allItemsJson) {
+        items = JSON.parse(allItemsJson);
+      }
+    } else {
+      // Fetch from specific collections
+      const collectionsMeta: CollectionMeta[] = JSON.parse(
+        (await kv.get("collections_meta")) || "[]"
+      );
+
+      const requestedSlugs = collectionsParam
+        .split(",")
+        .map((s) => s.trim().toLowerCase());
+
+      // Resolve collection names to slugs
+      const matchingSlugs = requestedSlugs
+        .map((name) => {
+          const found = collectionsMeta.find(
+            (c) =>
+              c.slug.toLowerCase() === name ||
+              c.displayName.toLowerCase() === name ||
+              c.singularName.toLowerCase() === name
+          );
+          return found?.slug;
+        })
+        .filter((slug): slug is string => Boolean(slug));
+
+      // Fetch items from each matching collection
+      for (const slug of matchingSlugs) {
+        const collectionJson = await kv.get(`collection:${slug}`);
+        if (collectionJson) {
+          const collectionItems: StoredItem[] = JSON.parse(collectionJson);
+          items.push(...collectionItems);
+        }
+      }
+    }
+
+    // Search using pre-computed searchText
+    const results: SearchResult[] = items
+      .filter((item) => item.searchText.includes(lowerQuery))
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        slug: item.slug,
+        collectionId: item.collectionId,
+        fieldData: item.fieldData,
+      }));
 
     return jsonResponse({ results, total: results.length });
   } catch (error) {
     console.error("Search error:", error);
-    return jsonResponse({ error: "Failed to search collections" }, 500);
+    return jsonResponse({ error: "Failed to search", details: String(error) }, 500);
   }
 }

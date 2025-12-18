@@ -7,7 +7,9 @@
     "build": "npm run build:client && next build",
     "build:client": "./node_modules/.bin/esbuild src/client/search.ts --bundle --outfile=public/search.js --target=es2018 --define:DEFAULT_API_PATH='\"/api/search\"' && ./node_modules/.bin/esbuild src/client/search.ts --bundle --minify --outfile=public/search.min.js --target=es2018 --define:DEFAULT_API_PATH='\"/app/api/search\"'",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync": "npx ts-node scripts/sync.ts",
+    "sync:prod": "SYNC_URL=https://your-domain.com/api/sync npx ts-node scripts/sync.ts"
   },
   "dependencies": {
     "esbuild": "^0.24.0",
@@ -24,6 +26,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.0.10",
     "tailwindcss": "^4",
+    "ts-node": "^10.9.2",
     "typescript": "5.9.3",
     "wrangler": "^4.55.0"
   }
