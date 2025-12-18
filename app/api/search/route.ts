@@ -51,8 +51,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const { env } = await getCloudflareContext({ async: true });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const kv = (env as any).SEARCH_CACHE;
+    const kv = env.SEARCH_CACHE;
 
     if (!kv) {
       return jsonResponse({ error: "KV namespace not configured" }, 500);
