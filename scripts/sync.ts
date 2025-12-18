@@ -27,7 +27,13 @@ async function main() {
 
   try {
     const response = await fetch(SYNC_URL, { headers });
-    const data = await response.json();
+    const data = (await response.json()) as {
+      collectionsCount: number;
+      itemsCount: number;
+      collections: { slug: string; itemCount: number }[];
+      syncedAt: string;
+      error?: string;
+    };
 
     if (!response.ok) {
       console.error("Sync failed:", data);
@@ -38,7 +44,7 @@ async function main() {
     console.log(`Collections: ${data.collectionsCount}`);
     console.log(`Total items: ${data.itemsCount}`);
     console.log("Collections synced:");
-    data.collections.forEach((c: { slug: string; itemCount: number }) => {
+    data.collections.forEach((c) => {
       console.log(`  - ${c.slug}: ${c.itemCount} items`);
     });
     console.log(`Synced at: ${data.syncedAt}`);
