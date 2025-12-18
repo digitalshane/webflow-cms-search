@@ -1,6 +1,8 @@
 // Injected at build time by esbuild
 declare const DEFAULT_API_PATH: string;
 
+export {};
+
 (function () {
   interface SearchConfig {
     apiUrl: string;
