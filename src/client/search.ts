@@ -61,8 +61,9 @@
     // Get configuration from data attributes
     const apiUrl =
       searchInput.getAttribute("data-api-url") || window.location.origin;
+    const isStaging = window.location.hostname.endsWith(".webflow.io");
     const apiPath =
-      searchInput.getAttribute("data-api-path") || "/app/api/search";
+      searchInput.getAttribute("data-api-path") || (isStaging ? "/api/search" : "/app/api/search");
     const collections = searchInput.getAttribute("data-collections") || "all";
     const debounceMs = parseInt(
       searchInput.getAttribute("data-debounce") || "300",

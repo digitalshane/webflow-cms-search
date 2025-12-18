@@ -170,18 +170,12 @@ export async function GET(request: NextRequest) {
 
   const token = process.env.WEBFLOW_API_TOKEN;
   if (!token) {
-    return jsonResponse(
-      { error: "Webflow API token not configured" },
-      500
-    );
+    return jsonResponse({ error: "Webflow API token not configured" }, 500);
   }
 
   const siteId = process.env.WEBFLOW_SITE_ID;
   if (!siteId) {
-    return jsonResponse(
-      { error: "Webflow site ID not configured" },
-      500
-    );
+    return jsonResponse({ error: "Webflow site ID not configured" }, 500);
   }
 
   let siteCollections: WebflowCollection[];
@@ -189,25 +183,16 @@ export async function GET(request: NextRequest) {
     siteCollections = await fetchSiteCollections(siteId, token);
   } catch (error) {
     console.error("Failed to fetch collections:", error);
-    return jsonResponse(
-      { error: "Failed to fetch site collections" },
-      500
-    );
+    return jsonResponse({ error: "Failed to fetch site collections" }, 500);
   }
 
   if (siteCollections.length === 0) {
-    return jsonResponse(
-      { error: "No collections found for this site" },
-      404
-    );
+    return jsonResponse({ error: "No collections found for this site" }, 404);
   }
 
   const collectionIds = resolveCollections(collectionsParam, siteCollections);
   if (collectionIds.length === 0) {
-    return jsonResponse(
-      { error: `Collection not found: ${collectionsParam}` },
-      404
-    );
+    return jsonResponse({ error: `Collection not found: ${collectionsParam}` }, 404);
   }
 
   const results: SearchResult[] = [];
@@ -219,15 +204,9 @@ export async function GET(request: NextRequest) {
       results.push(...matches);
     }
 
-    return jsonResponse({
-      results,
-      total: results.length,
-    });
+    return jsonResponse({ results, total: results.length });
   } catch (error) {
     console.error("Search error:", error);
-    return jsonResponse(
-      { error: "Failed to search collections" },
-      500
-    );
+    return jsonResponse({ error: "Failed to search collections" }, 500);
   }
 }
