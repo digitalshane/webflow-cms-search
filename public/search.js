@@ -1,21 +1,17 @@
 "use strict";
 (() => {
   // src/client/search.ts
-  (function() {
+  (function () {
     function debounce(fn, ms) {
       let timeoutId;
-      return function(...args) {
+      return function (...args) {
         clearTimeout(timeoutId);
         timeoutId = setTimeout(() => fn.apply(this, args), ms);
       };
     }
     function initSearch() {
-      const searchInput = document.querySelector(
-        '[data-tag="search"]'
-      );
-      const resultsContainer = document.querySelector(
-        '[data-tag="results"]'
-      );
+      const searchInput = document.querySelector('[data-tag="search"]');
+      const resultsContainer = document.querySelector('[data-tag="results"]');
       const resultTemplate = document.querySelector(
         '[data-tag="results-item"]'
       );
@@ -24,7 +20,9 @@
         return;
       }
       if (!resultsContainer) {
-        console.warn("Webflow Search: No element with data-tag='results' found");
+        console.warn(
+          "Webflow Search: No element with data-tag='results' found"
+        );
         return;
       }
       if (!resultTemplate) {
@@ -33,9 +31,13 @@
         );
         return;
       }
-      const apiUrl = searchInput.getAttribute("data-api-url") || window.location.origin;
       const isStaging = window.location.hostname.endsWith(".webflow.io");
-      const apiPath = searchInput.getAttribute("data-api-path") || (isStaging ? "/api/search" : "/app/api/search");
+      const apiUrl = isStaging
+        ? "http://localhost:3000"
+        : searchInput.getAttribute("data-api-url") || window.location.origin;
+      const apiPath =
+        searchInput.getAttribute("data-api-path") ||
+        (isStaging ? "/api/search" : "/app/api/search");
       const collections = searchInput.getAttribute("data-collections") || "all";
       const debounceMs = parseInt(
         searchInput.getAttribute("data-debounce") || "300",
@@ -46,7 +48,7 @@
         apiUrl,
         apiPath,
         collections,
-        debounceMs
+        debounceMs,
       };
       async function performSearch(query) {
         if (!query.trim()) {
@@ -91,9 +93,7 @@
           if (titleEl) {
             titleEl.textContent = result.name;
           }
-          const linkEl = item.querySelector(
-            '[data-tag="results-link"]'
-          );
+          const linkEl = item.querySelector('[data-tag="results-link"]');
           if (linkEl) {
             linkEl.href = `/${result.slug}`;
             if (!titleEl || linkEl === titleEl) {
@@ -105,9 +105,15 @@
             const fieldName = el.getAttribute("data-field");
             if (fieldName && result.fieldData[fieldName] !== void 0) {
               const value = result.fieldData[fieldName];
-              if (el instanceof HTMLAnchorElement && fieldName.includes("url")) {
+              if (
+                el instanceof HTMLAnchorElement &&
+                fieldName.includes("url")
+              ) {
                 el.href = String(value);
-              } else if (el instanceof HTMLImageElement && fieldName.includes("image")) {
+              } else if (
+                el instanceof HTMLImageElement &&
+                fieldName.includes("image")
+              ) {
                 el.src = String(value);
               } else {
                 el.textContent = String(value);
