@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/src/db/getDb";
 import { collectionsTable, itemsTable } from "@/src/db/schema";
-import { like, eq, inArray, and } from "drizzle-orm";
+import { sql, inArray } from "drizzle-orm";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,6 +26,17 @@ interface SearchResult {
   fieldData: Record<string, unknown>;
 }
 
+// Escape special FTS5 characters and format for search
+function formatFtsQuery(query: string): string {
+  // Escape double quotes and wrap each word with * for prefix matching
+  const escaped = query.replace(/"/g, '""');
+  // Split into words and add * for prefix matching on each word
+  const words = escaped.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '""';
+  // Use * suffix for prefix matching on each word
+  return words.map((w) => `"${w}"*`).join(" ");
+}
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q");
@@ -37,24 +48,16 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = await getDb();
-    const lowerQuery = `%${query.toLowerCase()}%`;
+    const ftsQuery = formatFtsQuery(query);
 
-    let results: SearchResult[];
+    let matchingIds: string[];
 
     if (collectionsParam.toLowerCase() === "all") {
-      // Search all items using SQL LIKE
-      const items = await db
-        .select({
-          id: itemsTable.id,
-          name: itemsTable.name,
-          slug: itemsTable.slug,
-          collectionId: itemsTable.collectionId,
-          fieldData: itemsTable.fieldData,
-        })
-        .from(itemsTable)
-        .where(like(itemsTable.searchText, lowerQuery));
-
-      results = items;
+      // Search all items using FTS5
+      const ftsResults = await db.all<{ item_id: string }>(sql`
+        SELECT item_id FROM items_fts WHERE items_fts MATCH ${ftsQuery}
+      `);
+      matchingIds = ftsResults.map((r) => r.item_id);
     } else {
       // Get collection slugs to filter by
       const requestedNames = collectionsParam
@@ -76,25 +79,32 @@ export async function GET(request: NextRequest) {
         return jsonResponse({ results: [], total: 0 });
       }
 
-      // Search within specific collections using combined SQL conditions
-      const collectionFilter =
-        matchingSlugs.length === 1
-          ? eq(itemsTable.collectionSlug, matchingSlugs[0])
-          : inArray(itemsTable.collectionSlug, matchingSlugs);
-
-      const items = await db
-        .select({
-          id: itemsTable.id,
-          name: itemsTable.name,
-          slug: itemsTable.slug,
-          collectionId: itemsTable.collectionId,
-          fieldData: itemsTable.fieldData,
-        })
-        .from(itemsTable)
-        .where(and(collectionFilter, like(itemsTable.searchText, lowerQuery)));
-
-      results = items;
+      // Search within specific collections using FTS5 with collection filter
+      // Build the collection filter for SQL
+      const slugList = matchingSlugs.map((s) => `'${s.replace(/'/g, "''")}'`).join(",");
+      const ftsResults = await db.all<{ item_id: string }>(sql.raw(`
+        SELECT item_id FROM items_fts
+        WHERE items_fts MATCH '${ftsQuery.replace(/'/g, "''")}'
+        AND collection_slug IN (${slugList})
+      `));
+      matchingIds = ftsResults.map((r) => r.item_id);
     }
+
+    if (matchingIds.length === 0) {
+      return jsonResponse({ results: [], total: 0 });
+    }
+
+    // Fetch full item data for matching IDs
+    const results: SearchResult[] = await db
+      .select({
+        id: itemsTable.id,
+        name: itemsTable.name,
+        slug: itemsTable.slug,
+        collectionId: itemsTable.collectionId,
+        fieldData: itemsTable.fieldData,
+      })
+      .from(itemsTable)
+      .where(inArray(itemsTable.id, matchingIds));
 
     return jsonResponse({ results, total: results.length });
   } catch (error) {

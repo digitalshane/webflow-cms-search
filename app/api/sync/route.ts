@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/src/db/getDb";
 import { collectionsTable, itemsTable, syncMetaTable } from "@/src/db/schema";
+import { sql } from "drizzle-orm";
 
 const WEBFLOW_API_BASE = "https://api-cdn.webflow.com/v2";
 
@@ -130,6 +131,9 @@ export async function GET(request: NextRequest) {
     await db.delete(itemsTable);
     await db.delete(collectionsTable);
 
+    // Clear FTS5 table
+    await db.run(sql`DELETE FROM items_fts`);
+
     // Insert collections metadata
     for (const collection of collections) {
       await db.insert(collectionsTable).values({
@@ -143,15 +147,24 @@ export async function GET(request: NextRequest) {
       const items = await fetchCollectionItems(collection.id, token);
 
       for (const item of items) {
+        const name = (item.fieldData.name as string) || "";
+        const searchText = buildSearchText(item.fieldData);
+
         await db.insert(itemsTable).values({
           id: item.id,
-          name: (item.fieldData.name as string) || "",
+          name,
           slug: (item.fieldData.slug as string) || "",
           collectionId: collection.id,
           collectionSlug: collection.slug,
           fieldData: item.fieldData,
-          searchText: buildSearchText(item.fieldData),
+          searchText,
         });
+
+        // Insert into FTS5 table for fast full-text search
+        await db.run(sql`
+          INSERT INTO items_fts (item_id, name, search_text, collection_slug)
+          VALUES (${item.id}, ${name}, ${searchText}, ${collection.slug})
+        `);
       }
 
       collectionResults.push({ slug: collection.slug, itemCount: items.length });
