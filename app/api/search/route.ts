@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/src/db/getDb";
-import { collectionsTable } from "@/src/db/schema";
-import { sql } from "drizzle-orm";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+
+// Cloudflare's Cache API - available in Workers runtime
+declare const caches: CacheStorage & { default: Cache };
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -44,25 +45,40 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const db = await getDb();
-    const ftsQuery = formatFtsQuery(query);
+    // Check edge cache first
+    const cache = caches.default;
+    const cacheKey = new Request(request.url, { method: "GET" });
+    const cachedResponse = await cache.match(cacheKey);
 
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    // Get Cloudflare context ONCE at the start - no async getDb() call
+    const { env } = await getCloudflareContext({ async: true });
+    const db = env.DB;
+
+    if (!db) {
+      return jsonResponse({ error: "Database not configured" }, 500);
+    }
+
+    const ftsQuery = formatFtsQuery(query);
     let results: SearchResult[];
 
     if (collectionsParam.toLowerCase() === "all") {
-      // Single query directly from FTS5 - no JOIN needed
-      const rows = await db.all<{
+      // Single query directly from FTS5
+      const { results: rows } = await db.prepare(`
+        SELECT item_id, name, slug, collection_id, field_data
+        FROM items_fts
+        WHERE items_fts MATCH ?
+        LIMIT 100
+      `).bind(ftsQuery).all<{
         item_id: string;
         name: string;
         slug: string;
         collection_id: string;
         field_data: string;
-      }>(sql`
-        SELECT item_id, name, slug, collection_id, field_data
-        FROM items_fts
-        WHERE items_fts MATCH ${ftsQuery}
-        LIMIT 100
-      `);
+      }>();
 
       results = rows.map((r) => ({
         id: r.item_id,
@@ -72,41 +88,35 @@ export async function GET(request: NextRequest) {
         fieldData: JSON.parse(r.field_data),
       }));
     } else {
-      // Get collection slugs to filter by
+      // Parse requested collection names
       const requestedNames = collectionsParam
         .split(",")
         .map((s) => s.trim().toLowerCase());
 
-      // Find matching collection slugs
-      const collections = await db.select().from(collectionsTable);
-      const matchingSlugs = collections
-        .filter(
-          (c) =>
-            requestedNames.includes(c.slug.toLowerCase()) ||
-            requestedNames.includes(c.displayName.toLowerCase()) ||
-            requestedNames.includes(c.singularName.toLowerCase())
+      // Build placeholders for the IN clause
+      const placeholders = requestedNames.map(() => "?").join(",");
+      // We need 3x the names for slug, displayName, singularName matching
+      const params = [...requestedNames, ...requestedNames, ...requestedNames, ftsQuery];
+
+      // Single query with subquery for collection filtering - no separate collections fetch
+      const { results: rows } = await db.prepare(`
+        SELECT f.item_id, f.name, f.slug, f.collection_id, f.field_data
+        FROM items_fts f
+        WHERE f.collection_slug IN (
+          SELECT slug FROM collections
+          WHERE LOWER(slug) IN (${placeholders})
+          OR LOWER(display_name) IN (${placeholders})
+          OR LOWER(singular_name) IN (${placeholders})
         )
-        .map((c) => c.slug);
-
-      if (matchingSlugs.length === 0) {
-        return jsonResponse({ results: [], total: 0 });
-      }
-
-      // Single query with collection filter - no JOIN needed
-      const slugList = matchingSlugs.map((s) => `'${s.replace(/'/g, "''")}'`).join(",");
-      const rows = await db.all<{
+        AND f MATCH ?
+        LIMIT 100
+      `).bind(...params).all<{
         item_id: string;
         name: string;
         slug: string;
         collection_id: string;
         field_data: string;
-      }>(sql.raw(`
-        SELECT item_id, name, slug, collection_id, field_data
-        FROM items_fts
-        WHERE items_fts MATCH '${ftsQuery.replace(/'/g, "''")}'
-        AND collection_slug IN (${slugList})
-        LIMIT 100
-      `));
+      }>();
 
       results = rows.map((r) => ({
         id: r.item_id,
@@ -117,7 +127,12 @@ export async function GET(request: NextRequest) {
       }));
     }
 
-    return jsonResponse({ results, total: results.length });
+    const response = jsonResponse({ results, total: results.length });
+
+    // Cache the response at the edge for 60 seconds
+    await cache.put(cacheKey, response.clone());
+
+    return response;
   } catch (error) {
     console.error("Search error:", error);
     return jsonResponse({ error: "Failed to search", details: String(error) }, 500);

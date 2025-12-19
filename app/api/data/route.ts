@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/src/db/getDb";
-import { collectionsTable, itemsTable } from "@/src/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+
+// Cloudflare's Cache API - available in Workers runtime
+declare const caches: CacheStorage & { default: Cache };
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,44 +34,97 @@ export async function GET(request: NextRequest) {
   const collectionsParam = searchParams.get("collections") || "all";
 
   try {
-    const db = await getDb();
+    // Check edge cache first
+    const cache = caches.default;
+    const cacheKey = new Request(request.url, { method: "GET" });
+    const cachedResponse = await cache.match(cacheKey);
+
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    // Get Cloudflare context ONCE at the start
+    const { env } = await getCloudflareContext({ async: true });
+    const db = env.DB;
+
+    if (!db) {
+      return jsonResponse({ error: "Database not configured" }, 500);
+    }
 
     let items: DataItem[];
 
     if (collectionsParam.toLowerCase() === "all") {
       // Fetch all items
-      items = await db.select().from(itemsTable);
+      const { results: rows } = await db.prepare(`
+        SELECT id, name, slug, collection_id, collection_slug, field_data, search_text
+        FROM items
+      `).all<{
+        id: string;
+        name: string;
+        slug: string;
+        collection_id: string;
+        collection_slug: string;
+        field_data: string;
+        search_text: string;
+      }>();
+
+      items = rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        collectionId: r.collection_id,
+        collectionSlug: r.collection_slug,
+        fieldData: JSON.parse(r.field_data),
+        searchText: r.search_text,
+      }));
     } else {
-      // Get collection slugs to filter by
+      // Parse requested collection names
       const requestedNames = collectionsParam
         .split(",")
         .map((s) => s.trim().toLowerCase());
 
-      // Find matching collection slugs
-      const collections = await db.select().from(collectionsTable);
-      const matchingSlugs = collections
-        .filter(
-          (c) =>
-            requestedNames.includes(c.slug.toLowerCase()) ||
-            requestedNames.includes(c.displayName.toLowerCase()) ||
-            requestedNames.includes(c.singularName.toLowerCase())
+      // Build placeholders for the IN clause
+      const placeholders = requestedNames.map(() => "?").join(",");
+      // We need 3x the names for slug, displayName, singularName matching
+      const params = [...requestedNames, ...requestedNames, ...requestedNames];
+
+      // Single query with subquery for collection filtering
+      const { results: rows } = await db.prepare(`
+        SELECT id, name, slug, collection_id, collection_slug, field_data, search_text
+        FROM items
+        WHERE collection_slug IN (
+          SELECT slug FROM collections
+          WHERE LOWER(slug) IN (${placeholders})
+          OR LOWER(display_name) IN (${placeholders})
+          OR LOWER(singular_name) IN (${placeholders})
         )
-        .map((c) => c.slug);
+      `).bind(...params).all<{
+        id: string;
+        name: string;
+        slug: string;
+        collection_id: string;
+        collection_slug: string;
+        field_data: string;
+        search_text: string;
+      }>();
 
-      if (matchingSlugs.length === 0) {
-        return jsonResponse({ items: [], total: 0 });
-      }
-
-      // Fetch items from specific collections
-      const collectionFilter =
-        matchingSlugs.length === 1
-          ? eq(itemsTable.collectionSlug, matchingSlugs[0])
-          : inArray(itemsTable.collectionSlug, matchingSlugs);
-
-      items = await db.select().from(itemsTable).where(collectionFilter);
+      items = rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        collectionId: r.collection_id,
+        collectionSlug: r.collection_slug,
+        fieldData: JSON.parse(r.field_data),
+        searchText: r.search_text,
+      }));
     }
 
-    return jsonResponse({ items, total: items.length });
+    const response = jsonResponse({ items, total: items.length });
+
+    // Cache the response at the edge for 5 minutes
+    await cache.put(cacheKey, response.clone());
+
+    return response;
   } catch (error) {
     console.error("Data fetch error:", error);
     return jsonResponse({ error: "Failed to fetch data", details: String(error) }, 500);
