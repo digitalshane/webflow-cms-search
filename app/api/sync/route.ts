@@ -160,10 +160,11 @@ export async function GET(request: NextRequest) {
           searchText,
         });
 
-        // Insert into FTS5 table for fast full-text search
+        // Insert into FTS5 table for fast full-text search (with all data to avoid JOINs)
+        const fieldDataJson = JSON.stringify(item.fieldData);
         await db.run(sql`
-          INSERT INTO items_fts (item_id, name, search_text, collection_slug)
-          VALUES (${item.id}, ${name}, ${searchText}, ${collection.slug})
+          INSERT INTO items_fts (item_id, name, slug, collection_id, collection_slug, field_data, search_text)
+          VALUES (${item.id}, ${name}, ${(item.fieldData.slug as string) || ""}, ${collection.id}, ${collection.slug}, ${fieldDataJson}, ${searchText})
         `);
       }
 
