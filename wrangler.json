@@ -3,10 +3,12 @@
   "main": ".open-next/worker.js",
   "compatibility_date": "2025-03-03",
   "compatibility_flags": ["nodejs_compat"],
-  "kv_namespaces": [
+  "d1_databases": [
     {
-      "binding": "SEARCH_CACHE",
-      "id": "placeholder-will-be-assigned-on-deploy"
+      "binding": "DB",
+      "database_name": "search_db",
+      "database_id": "placeholder-will-be-assigned-on-deploy",
+      "migrations_dir": "drizzle"
     }
   ]
 }

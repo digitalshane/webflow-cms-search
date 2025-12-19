@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { getDb } from "@/src/db/getDb";
+import { collectionsTable, itemsTable } from "@/src/db/schema";
+import { eq, inArray } from "drizzle-orm";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,16 +18,6 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
 
-interface StoredItem {
-  id: string;
-  name: string;
-  slug: string;
-  collectionId: string;
-  collectionSlug: string;
-  fieldData: Record<string, unknown>;
-  searchText: string;
-}
-
 interface DataItem {
   id: string;
   name: string;
@@ -36,78 +28,49 @@ interface DataItem {
   searchText: string;
 }
 
-interface CollectionMeta {
-  id: string;
-  slug: string;
-  displayName: string;
-  singularName: string;
-}
-
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const collectionsParam = searchParams.get("collections") || "all";
 
   try {
-    const { env } = await getCloudflareContext({ async: true });
-    const kv = env.SEARCH_CACHE;
+    const db = await getDb();
 
-    if (!kv) {
-      return jsonResponse({ error: "KV namespace not configured" }, 500);
-    }
-
-    let items: StoredItem[] = [];
+    let items: DataItem[];
 
     if (collectionsParam.toLowerCase() === "all") {
       // Fetch all items
-      const allItemsJson = await kv.get("all_items");
-      if (allItemsJson) {
-        items = JSON.parse(allItemsJson);
-      }
+      items = await db.select().from(itemsTable);
     } else {
-      // Fetch from specific collections
-      const collectionsMeta: CollectionMeta[] = JSON.parse(
-        (await kv.get("collections_meta")) || "[]"
-      );
-
-      const requestedSlugs = collectionsParam
+      // Get collection slugs to filter by
+      const requestedNames = collectionsParam
         .split(",")
         .map((s) => s.trim().toLowerCase());
 
-      // Resolve collection names to slugs
-      const matchingSlugs = requestedSlugs
-        .map((name) => {
-          const found = collectionsMeta.find(
-            (c) =>
-              c.slug.toLowerCase() === name ||
-              c.displayName.toLowerCase() === name ||
-              c.singularName.toLowerCase() === name
-          );
-          return found?.slug;
-        })
-        .filter((slug): slug is string => Boolean(slug));
+      // Find matching collection slugs
+      const collections = await db.select().from(collectionsTable);
+      const matchingSlugs = collections
+        .filter(
+          (c) =>
+            requestedNames.includes(c.slug.toLowerCase()) ||
+            requestedNames.includes(c.displayName.toLowerCase()) ||
+            requestedNames.includes(c.singularName.toLowerCase())
+        )
+        .map((c) => c.slug);
 
-      // Fetch items from each matching collection
-      for (const slug of matchingSlugs) {
-        const collectionJson = await kv.get(`collection:${slug}`);
-        if (collectionJson) {
-          const collectionItems: StoredItem[] = JSON.parse(collectionJson);
-          items.push(...collectionItems);
-        }
+      if (matchingSlugs.length === 0) {
+        return jsonResponse({ items: [], total: 0 });
       }
+
+      // Fetch items from specific collections
+      const collectionFilter =
+        matchingSlugs.length === 1
+          ? eq(itemsTable.collectionSlug, matchingSlugs[0])
+          : inArray(itemsTable.collectionSlug, matchingSlugs);
+
+      items = await db.select().from(itemsTable).where(collectionFilter);
     }
 
-    // Return items with searchText included for client-side searching
-    const data: DataItem[] = items.map((item) => ({
-      id: item.id,
-      name: item.name,
-      slug: item.slug,
-      collectionId: item.collectionId,
-      collectionSlug: item.collectionSlug,
-      fieldData: item.fieldData,
-      searchText: item.searchText,
-    }));
-
-    return jsonResponse({ items: data, total: data.length });
+    return jsonResponse({ items, total: items.length });
   } catch (error) {
     console.error("Data fetch error:", error);
     return jsonResponse({ error: "Failed to fetch data", details: String(error) }, 500);

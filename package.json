@@ -9,9 +9,12 @@
     "start": "next start",
     "lint": "eslint",
     "sync": "npx ts-node scripts/sync.ts",
-    "sync:prod": "SYNC_URL=https://your-domain.com/api/sync npx ts-node scripts/sync.ts"
+    "sync:prod": "SYNC_URL=https://your-domain.com/api/sync npx ts-node scripts/sync.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:apply:local": "wrangler d1 migrations apply DB --local"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.1",
     "esbuild": "^0.24.0",
     "next": "16.0.10",
     "react": "19.2.1",
@@ -24,6 +27,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.8",
     "eslint": "^9",
     "eslint-config-next": "16.0.10",
     "tailwindcss": "^4",

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { getDb } from "@/src/db/getDb";
+import { collectionsTable, itemsTable } from "@/src/db/schema";
+import { like, eq, inArray, and } from "drizzle-orm";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,29 +18,12 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
 
-interface StoredItem {
-  id: string;
-  name: string;
-  slug: string;
-  collectionId: string;
-  collectionSlug: string;
-  fieldData: Record<string, unknown>;
-  searchText: string;
-}
-
 interface SearchResult {
   id: string;
   name: string;
   slug: string;
   collectionId: string;
   fieldData: Record<string, unknown>;
-}
-
-interface CollectionMeta {
-  id: string;
-  slug: string;
-  displayName: string;
-  singularName: string;
 }
 
 export async function GET(request: NextRequest) {
@@ -51,65 +36,65 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { env } = await getCloudflareContext({ async: true });
-    const kv = env.SEARCH_CACHE;
+    const db = await getDb();
+    const lowerQuery = `%${query.toLowerCase()}%`;
 
-    if (!kv) {
-      return jsonResponse({ error: "KV namespace not configured" }, 500);
-    }
-
-    const lowerQuery = query.toLowerCase();
-    let items: StoredItem[] = [];
+    let results: SearchResult[];
 
     if (collectionsParam.toLowerCase() === "all") {
-      // Fetch all items
-      const allItemsJson = await kv.get("all_items");
-      if (allItemsJson) {
-        items = JSON.parse(allItemsJson);
-      }
-    } else {
-      // Fetch from specific collections
-      const collectionsMeta: CollectionMeta[] = JSON.parse(
-        (await kv.get("collections_meta")) || "[]"
-      );
+      // Search all items using SQL LIKE
+      const items = await db
+        .select({
+          id: itemsTable.id,
+          name: itemsTable.name,
+          slug: itemsTable.slug,
+          collectionId: itemsTable.collectionId,
+          fieldData: itemsTable.fieldData,
+        })
+        .from(itemsTable)
+        .where(like(itemsTable.searchText, lowerQuery));
 
-      const requestedSlugs = collectionsParam
+      results = items;
+    } else {
+      // Get collection slugs to filter by
+      const requestedNames = collectionsParam
         .split(",")
         .map((s) => s.trim().toLowerCase());
 
-      // Resolve collection names to slugs
-      const matchingSlugs = requestedSlugs
-        .map((name) => {
-          const found = collectionsMeta.find(
-            (c) =>
-              c.slug.toLowerCase() === name ||
-              c.displayName.toLowerCase() === name ||
-              c.singularName.toLowerCase() === name
-          );
-          return found?.slug;
-        })
-        .filter((slug): slug is string => Boolean(slug));
+      // Find matching collection slugs
+      const collections = await db.select().from(collectionsTable);
+      const matchingSlugs = collections
+        .filter(
+          (c) =>
+            requestedNames.includes(c.slug.toLowerCase()) ||
+            requestedNames.includes(c.displayName.toLowerCase()) ||
+            requestedNames.includes(c.singularName.toLowerCase())
+        )
+        .map((c) => c.slug);
 
-      // Fetch items from each matching collection
-      for (const slug of matchingSlugs) {
-        const collectionJson = await kv.get(`collection:${slug}`);
-        if (collectionJson) {
-          const collectionItems: StoredItem[] = JSON.parse(collectionJson);
-          items.push(...collectionItems);
-        }
+      if (matchingSlugs.length === 0) {
+        return jsonResponse({ results: [], total: 0 });
       }
-    }
 
-    // Search using pre-computed searchText
-    const results: SearchResult[] = items
-      .filter((item) => item.searchText.includes(lowerQuery))
-      .map((item) => ({
-        id: item.id,
-        name: item.name,
-        slug: item.slug,
-        collectionId: item.collectionId,
-        fieldData: item.fieldData,
-      }));
+      // Search within specific collections using combined SQL conditions
+      const collectionFilter =
+        matchingSlugs.length === 1
+          ? eq(itemsTable.collectionSlug, matchingSlugs[0])
+          : inArray(itemsTable.collectionSlug, matchingSlugs);
+
+      const items = await db
+        .select({
+          id: itemsTable.id,
+          name: itemsTable.name,
+          slug: itemsTable.slug,
+          collectionId: itemsTable.collectionId,
+          fieldData: itemsTable.fieldData,
+        })
+        .from(itemsTable)
+        .where(and(collectionFilter, like(itemsTable.searchText, lowerQuery)));
+
+      results = items;
+    }
 
     return jsonResponse({ results, total: results.length });
   } catch (error) {

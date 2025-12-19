@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 interface CloudflareEnv {
-  SEARCH_CACHE: KVNamespace;
+  DB: D1Database;
 }
 
 declare module "@opennextjs/cloudflare" {

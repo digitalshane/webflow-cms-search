@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { getDb } from "@/src/db/getDb";
+import { collectionsTable, itemsTable, syncMetaTable } from "@/src/db/schema";
 
 const WEBFLOW_API_BASE = "https://api-cdn.webflow.com/v2";
 
@@ -32,16 +33,6 @@ interface WebflowResponse {
     offset: number;
     total: number;
   };
-}
-
-interface StoredItem {
-  id: string;
-  name: string;
-  slug: string;
-  collectionId: string;
-  collectionSlug: string;
-  fieldData: Record<string, unknown>;
-  searchText: string; // Pre-computed lowercase text for fast searching
 }
 
 interface SyncResult {
@@ -127,71 +118,60 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { env } = await getCloudflareContext({ async: true });
-    const kv = env.SEARCH_CACHE;
+    const db = await getDb();
 
-    if (!kv) {
-      return NextResponse.json({ error: "KV namespace not configured" }, { status: 500 });
-    }
-
-    // Fetch all collections
+    // Fetch all collections from Webflow
     const collections = await fetchSiteCollections(siteId, token);
 
-    const allItems: StoredItem[] = [];
     const collectionResults: { slug: string; itemCount: number }[] = [];
+    let totalItems = 0;
 
-    // Fetch items from each collection
+    // Clear existing data and insert fresh data
+    await db.delete(itemsTable);
+    await db.delete(collectionsTable);
+
+    // Insert collections metadata
     for (const collection of collections) {
+      await db.insert(collectionsTable).values({
+        id: collection.id,
+        slug: collection.slug,
+        displayName: collection.displayName,
+        singularName: collection.singularName,
+      });
+
+      // Fetch and insert items for this collection
       const items = await fetchCollectionItems(collection.id, token);
 
-      const storedItems: StoredItem[] = items.map((item) => ({
-        id: item.id,
-        name: (item.fieldData.name as string) || "",
-        slug: (item.fieldData.slug as string) || "",
-        collectionId: collection.id,
-        collectionSlug: collection.slug,
-        fieldData: item.fieldData,
-        searchText: buildSearchText(item.fieldData),
-      }));
+      for (const item of items) {
+        await db.insert(itemsTable).values({
+          id: item.id,
+          name: (item.fieldData.name as string) || "",
+          slug: (item.fieldData.slug as string) || "",
+          collectionId: collection.id,
+          collectionSlug: collection.slug,
+          fieldData: item.fieldData,
+          searchText: buildSearchText(item.fieldData),
+        });
+      }
 
-      allItems.push(...storedItems);
       collectionResults.push({ slug: collection.slug, itemCount: items.length });
-
-      // Also store per-collection for filtered searches
-      await kv.put(
-        `collection:${collection.slug}`,
-        JSON.stringify(storedItems),
-        { expirationTtl: 86400 * 7 } // 7 days TTL
-      );
+      totalItems += items.length;
     }
-
-    // Store all items for "all collections" searches
-    await kv.put("all_items", JSON.stringify(allItems), {
-      expirationTtl: 86400 * 7, // 7 days TTL
-    });
-
-    // Store collection metadata
-    await kv.put(
-      "collections_meta",
-      JSON.stringify(
-        collections.map((c) => ({
-          id: c.id,
-          slug: c.slug,
-          displayName: c.displayName,
-          singularName: c.singularName,
-        }))
-      ),
-      { expirationTtl: 86400 * 7 }
-    );
 
     // Store sync timestamp
     const syncedAt = new Date().toISOString();
-    await kv.put("last_sync", syncedAt);
+    await db
+      .insert(syncMetaTable)
+      .values({ key: "last_sync", value: syncedAt })
+      .onConflictDoUpdate({
+        target: syncMetaTable.key,
+        set: { value: syncedAt },
+      });
 
     const result: SyncResult = {
       success: true,
       collectionsCount: collections.length,
-      itemsCount: allItems.length,
+      itemsCount: totalItems,
       collections: collectionResults,
       syncedAt,
     };
