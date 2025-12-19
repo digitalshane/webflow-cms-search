@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
-// Cloudflare's Cache API - available in Workers runtime
-declare const caches: CacheStorage & { default: Cache };
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -34,15 +31,6 @@ export async function GET(request: NextRequest) {
   const collectionsParam = searchParams.get("collections") || "all";
 
   try {
-    // Check edge cache first
-    const cache = caches.default;
-    const cacheKey = new Request(request.url, { method: "GET" });
-    const cachedResponse = await cache.match(cacheKey);
-
-    if (cachedResponse) {
-      return cachedResponse;
-    }
-
     // Get Cloudflare context ONCE at the start
     const { env } = await getCloudflareContext({ async: true });
     const db = env.DB;
@@ -119,12 +107,7 @@ export async function GET(request: NextRequest) {
       }));
     }
 
-    const response = jsonResponse({ items, total: items.length });
-
-    // Cache the response at the edge for 5 minutes
-    await cache.put(cacheKey, response.clone());
-
-    return response;
+    return jsonResponse({ items, total: items.length });
   } catch (error) {
     console.error("Data fetch error:", error);
     return jsonResponse({ error: "Failed to fetch data", details: String(error) }, 500);

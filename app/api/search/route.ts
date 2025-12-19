@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
-// Cloudflare's Cache API - available in Workers runtime
-declare const caches: CacheStorage & { default: Cache };
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -45,15 +42,6 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Check edge cache first
-    const cache = caches.default;
-    const cacheKey = new Request(request.url, { method: "GET" });
-    const cachedResponse = await cache.match(cacheKey);
-
-    if (cachedResponse) {
-      return cachedResponse;
-    }
-
     // Get Cloudflare context ONCE at the start - no async getDb() call
     const { env } = await getCloudflareContext({ async: true });
     const db = env.DB;
@@ -99,16 +87,17 @@ export async function GET(request: NextRequest) {
       const params = [...requestedNames, ...requestedNames, ...requestedNames, ftsQuery];
 
       // Single query with subquery for collection filtering - no separate collections fetch
+      // Note: FTS5 requires table name (not alias) in MATCH clause
       const { results: rows } = await db.prepare(`
-        SELECT f.item_id, f.name, f.slug, f.collection_id, f.field_data
-        FROM items_fts f
-        WHERE f.collection_slug IN (
+        SELECT item_id, name, slug, collection_id, field_data
+        FROM items_fts
+        WHERE collection_slug IN (
           SELECT slug FROM collections
           WHERE LOWER(slug) IN (${placeholders})
           OR LOWER(display_name) IN (${placeholders})
           OR LOWER(singular_name) IN (${placeholders})
         )
-        AND f MATCH ?
+        AND items_fts MATCH ?
         LIMIT 100
       `).bind(...params).all<{
         item_id: string;
@@ -127,12 +116,7 @@ export async function GET(request: NextRequest) {
       }));
     }
 
-    const response = jsonResponse({ results, total: results.length });
-
-    // Cache the response at the edge for 60 seconds
-    await cache.put(cacheKey, response.clone());
-
-    return response;
+    return jsonResponse({ results, total: results.length });
   } catch (error) {
     console.error("Search error:", error);
     return jsonResponse({ error: "Failed to search", details: String(error) }, 500);
