@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/src/db/getDb";
-import { collectionsTable, itemsTable, syncMetaTable } from "@/src/db/schema";
-import { sql } from "drizzle-orm";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+
+// D1 batch limit is ~500 statements, use conservative chunk size
+const BATCH_CHUNK_SIZE = 400;
 
 const WEBFLOW_API_BASE = "https://api-cdn.webflow.com/v2";
 
@@ -119,7 +120,12 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const db = await getDb();
+    const { env } = await getCloudflareContext({ async: true });
+    const d1 = env.DB;
+
+    if (!d1) {
+      return NextResponse.json({ error: "D1 database not configured" }, { status: 500 });
+    }
 
     // Fetch all collections from Webflow
     const collections = await fetchSiteCollections(siteId, token);
@@ -127,60 +133,68 @@ export async function GET(request: NextRequest) {
     const collectionResults: { slug: string; itemCount: number }[] = [];
     let totalItems = 0;
 
-    // Clear existing data and insert fresh data
-    await db.delete(itemsTable);
-    await db.delete(collectionsTable);
+    // Collect all items from all collections first
+    const allItems: { collection: WebflowCollection; item: WebflowItem }[] = [];
 
-    // Clear FTS5 table
-    await db.run(sql`DELETE FROM items_fts`);
-
-    // Insert collections metadata
     for (const collection of collections) {
-      await db.insert(collectionsTable).values({
-        id: collection.id,
-        slug: collection.slug,
-        displayName: collection.displayName,
-        singularName: collection.singularName,
-      });
-
-      // Fetch and insert items for this collection
       const items = await fetchCollectionItems(collection.id, token);
-
       for (const item of items) {
-        const name = (item.fieldData.name as string) || "";
-        const searchText = buildSearchText(item.fieldData);
-
-        await db.insert(itemsTable).values({
-          id: item.id,
-          name,
-          slug: (item.fieldData.slug as string) || "",
-          collectionId: collection.id,
-          collectionSlug: collection.slug,
-          fieldData: item.fieldData,
-          searchText,
-        });
-
-        // Insert into FTS5 table for fast full-text search (with all data to avoid JOINs)
-        const fieldDataJson = JSON.stringify(item.fieldData);
-        await db.run(sql`
-          INSERT INTO items_fts (item_id, name, slug, collection_id, collection_slug, field_data, search_text)
-          VALUES (${item.id}, ${name}, ${(item.fieldData.slug as string) || ""}, ${collection.id}, ${collection.slug}, ${fieldDataJson}, ${searchText})
-        `);
+        allItems.push({ collection, item });
       }
-
       collectionResults.push({ slug: collection.slug, itemCount: items.length });
       totalItems += items.length;
     }
 
+    // Build all SQL statements for batch execution
+    const statements: D1PreparedStatement[] = [];
+
+    // Clear existing data
+    statements.push(d1.prepare("DELETE FROM items"));
+    statements.push(d1.prepare("DELETE FROM collections"));
+    statements.push(d1.prepare("DELETE FROM items_fts"));
+
+    // Insert collections
+    for (const collection of collections) {
+      statements.push(
+        d1.prepare(
+          "INSERT INTO collections (id, slug, display_name, singular_name) VALUES (?, ?, ?, ?)"
+        ).bind(collection.id, collection.slug, collection.displayName, collection.singularName)
+      );
+    }
+
+    // Insert items and FTS entries
+    for (const { collection, item } of allItems) {
+      const name = (item.fieldData.name as string) || "";
+      const slug = (item.fieldData.slug as string) || "";
+      const searchText = buildSearchText(item.fieldData);
+      const fieldDataJson = JSON.stringify(item.fieldData);
+
+      statements.push(
+        d1.prepare(
+          "INSERT INTO items (id, name, slug, collection_id, collection_slug, field_data, search_text) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind(item.id, name, slug, collection.id, collection.slug, fieldDataJson, searchText)
+      );
+
+      statements.push(
+        d1.prepare(
+          "INSERT INTO items_fts (item_id, name, slug, collection_id, collection_slug, field_data, search_text) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind(item.id, name, slug, collection.id, collection.slug, fieldDataJson, searchText)
+      );
+    }
+
     // Store sync timestamp
     const syncedAt = new Date().toISOString();
-    await db
-      .insert(syncMetaTable)
-      .values({ key: "last_sync", value: syncedAt })
-      .onConflictDoUpdate({
-        target: syncMetaTable.key,
-        set: { value: syncedAt },
-      });
+    statements.push(
+      d1.prepare(
+        "INSERT INTO sync_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      ).bind("last_sync", syncedAt)
+    );
+
+    // Execute statements in chunks (D1 has a ~500 statement limit per batch)
+    for (let i = 0; i < statements.length; i += BATCH_CHUNK_SIZE) {
+      const chunk = statements.slice(i, i + BATCH_CHUNK_SIZE);
+      await d1.batch(chunk);
+    }
 
     const result: SyncResult = {
       success: true,
